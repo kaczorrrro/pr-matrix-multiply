@@ -45,14 +45,30 @@ struct Int1_t
 
 int main()
 {
-	int matrix_size = 16;
+	int matrix_size = 5;
+	//for (int i=8; i<1000;i++) {
+	//	Matrix_t h_a(i, i); for (FloatT & e : h_a) e = rand();
+	//	Matrix_t h_b(i, i); for (FloatT & e : h_b) e = rand();
+
+	//	Matrix_t h_out_gpu = cuda_matmul(h_a, h_b, true);
+	//	Matrix_t h_out_cpu(h_out_gpu.rows, h_out_gpu.columns);
+
+	//	multiply_matrices_IKJ(h_a, h_b, h_out_cpu);
+	//	std::cout << i << std::endl;
+	//	if (!(h_out_gpu == h_out_cpu))
+	//		std::cout << std::endl<< i << "Fail" << std::endl;
+	//	std::cout << "Done " << std::endl;
+	//	break;
+	//}
+
+
 	Matrix_t h_a(matrix_size, matrix_size); for (FloatT & e : h_a) e = rand() % 5;
-	Matrix_t h_b(matrix_size, matrix_size); for (FloatT & e : h_b) e = rand() % 4;
+	Matrix_t h_b(matrix_size, matrix_size*2); for (FloatT & e : h_b) e = rand() % 4;
 	h_a.print();
 	std::cout << std::endl;
 	h_b.print();
 	std::cout << std::endl;
-	Matrix_t h_out_gpu = cuda_matmul(h_a, h_b);
+	Matrix_t h_out_gpu = cuda_matmul(h_a, h_b, true);
 	Matrix_t h_out_cpu(h_out_gpu.rows, h_out_gpu.columns);
 	h_out_cpu.setAllTo(0);
 	multiply_matrices_IKJ(h_a, h_b, h_out_cpu);

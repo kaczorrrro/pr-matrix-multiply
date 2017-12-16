@@ -10,6 +10,13 @@ struct Int1_t
 
 __global__ void mm(Matrix_t a, Matrix_t b, Matrix_t out)
 {
+	int out_x = blockIdx.x*block_size + threadIdx.x;
+	int out_y = blockIdx.y*block_size + threadIdx.y;
+
+	//Some threads don't produce any value, but they are needed to copy whole blocks to shared memory
+	bool has_output = out_x < out.columns && out_y < out.rows;
+
+
 	//Declare shared blocks
 	__shared__ FloatT shared_memory_0[block_size*block_size];
 	__shared__ FloatT shared_memory_1[block_size*block_size];
@@ -20,36 +27,172 @@ __global__ void mm(Matrix_t a, Matrix_t b, Matrix_t out)
 	Matrix_t shared_a[] = { Matrix_t(shared_memory_0, block_size, block_size), Matrix_t(shared_memory_1, block_size, block_size) };
 	Matrix_t shared_b[] = { Matrix_t(shared_memory_2, block_size, block_size), Matrix_t(shared_memory_3, block_size, block_size) };
 
+	Int1_t fetch_idx{ 0 };
+
 	//Fetch first block
-	shared_a[0].at(threadIdx.y, threadIdx.x) = a.at(blockIdx.y*block_size + threadIdx.y, 0*block_size + threadIdx.x);
-	shared_b[0].at(threadIdx.y, threadIdx.x) = b.at(0*block_size + threadIdx.y, blockIdx.x*block_size + threadIdx.x);
+	{
+		//Copy element's value to shared memory or set it to 0 if it doens't exist
+		int a_x = 0 * block_size + threadIdx.x;
+		int a_y = blockIdx.y*block_size + threadIdx.y;
+		int b_x = blockIdx.x*block_size + threadIdx.x;
+		int b_y = 0 * block_size + threadIdx.y;
+
+		if (a_x < a.columns && a_y < a.rows)
+			shared_a[fetch_idx.val].at(threadIdx.y, threadIdx.x) = a.at(a_y, a_x);
+		else
+			shared_a[fetch_idx.val].at(threadIdx.y, threadIdx.x) = 0;
+
+		if (b_x < b.columns && b_y < b.rows)
+			shared_b[fetch_idx.val].at(threadIdx.y, threadIdx.x) = b.at(b_y, b_x);
+		else
+			shared_b[fetch_idx.val].at(threadIdx.y, threadIdx.x) = 0;
+
+		fetch_idx.val++;
+	}
+
 	__syncthreads();
 
-	Int1_t fetch_idx{ 1 };
+	
 	FloatT acc = 0;
-	for (int block_num = 0, blocks_to_process = a.columns / block_size; block_num < blocks_to_process; block_num++) {//TODO CEIL
+	for (int block_num = 0, blocks_to_process = std::ceil(static_cast<double>(a.columns) / block_size); block_num < blocks_to_process; block_num++) {//TODO CEIL
 		//Fetch next block
 		if (block_num+1 != blocks_to_process) {
 			int next_block_num = block_num + 1;
-			shared_a[fetch_idx.val].at(threadIdx.y, threadIdx.x) = a.at(blockIdx.y*block_size + threadIdx.y, next_block_num*block_size + threadIdx.x);
-			shared_b[fetch_idx.val].at(threadIdx.y, threadIdx.x) = b.at(next_block_num*block_size + threadIdx.y, blockIdx.x*block_size + threadIdx.x);
+			int a_x = next_block_num * block_size + threadIdx.x;
+			int a_y = blockIdx.y*block_size + threadIdx.y;
+			int b_x = blockIdx.x*block_size + threadIdx.x;
+			int b_y = next_block_num * block_size + threadIdx.y;
+
+			//Copy element's value to shared memory or set it to 0 if it doens't exist
+			if (a_x < a.columns && a_y < a.rows)
+				shared_a[fetch_idx.val].at(threadIdx.y, threadIdx.x) = a.at(a_y, a_x);
+			else
+				shared_a[fetch_idx.val].at(threadIdx.y, threadIdx.x) = 0;
+
+			if (b_x < b.columns && b_y < b.rows)
+				shared_b[fetch_idx.val].at(threadIdx.y, threadIdx.x) = b.at(b_y, b_x);
+			else
+				shared_b[fetch_idx.val].at(threadIdx.y, threadIdx.x) = 0;
+		}
+
+
+		//Now we will make use of previously fetched block (and later fetch again to it's index)
+		fetch_idx.val++;
+
+		//Accumulate result
+		for (int i = 0; i < block_size; i++) 
+			acc += shared_a[fetch_idx.val].at(threadIdx.y, i)*shared_b[fetch_idx.val].at(i, threadIdx.x);
+		
+		__syncthreads();
+	}
+
+	if (has_output)
+		out.at(out_y, out_x) = acc;
+}
+
+__global__ void mm2(Matrix_t a, Matrix_t b, Matrix_t out)
+{
+	int out_x_0 = blockIdx.x*block_size*2 + threadIdx.x*2;
+	int out_x_1 = out_x_0 + 1;
+	int out_y = blockIdx.y*block_size + threadIdx.y;
+
+
+	//Some threads don't produce any value, but they are needed to copy whole blocks to shared memory
+	bool has_output_0 = out_x_0 < out.columns && out_y < out.rows;
+	bool has_output_1 = out_x_1 < out.columns && out_y < out.rows;
+
+
+	//Declare shared blocks (B blocks are 2x wider)
+	__shared__ FloatT shared_memory_0[block_size*block_size];
+	__shared__ FloatT shared_memory_1[block_size*block_size];
+	__shared__ FloatT shared_memory_2[block_size*block_size*2];
+	__shared__ FloatT shared_memory_3[block_size*block_size*2];
+
+	//Wrap them intro Matrix class
+	Matrix_t shared_a[] = { Matrix_t(shared_memory_0, block_size, block_size), Matrix_t(shared_memory_1, block_size, block_size) };
+	Matrix_t shared_b[] = { Matrix_t(shared_memory_2, block_size, block_size*2), Matrix_t(shared_memory_3, block_size, block_size*2) };
+
+	Int1_t fetch_idx{ 0 };
+
+	//Fetch first block
+	{
+		//Copy element's value to shared memory or set it to 0 if it doens't exist
+		int a_x = 0 * block_size + threadIdx.x;
+		int a_y = blockIdx.y*block_size + threadIdx.y;
+		int b_x_0 = blockIdx.x*block_size * 2 + threadIdx.x * 2;
+		int b_x_1 = b_x_0 + 1;
+		int b_y = 0 * block_size + threadIdx.y;
+
+		if (a_x < a.columns && a_y < a.rows)
+			shared_a[fetch_idx.val].at(threadIdx.y, threadIdx.x) = a.at(a_y, a_x);
+		else
+			shared_a[fetch_idx.val].at(threadIdx.y, threadIdx.x) = 0;
+
+		if (b_x_0 < b.columns && b_y < b.rows)
+			shared_b[fetch_idx.val].at(threadIdx.y, threadIdx.x*2) = b.at(b_y, b_x_0);
+		else
+			shared_b[fetch_idx.val].at(threadIdx.y, threadIdx.x*2) = 0;
+
+		if (b_x_1 < b.columns && b_y < b.rows)
+			shared_b[fetch_idx.val].at(threadIdx.y, threadIdx.x*2+1) = b.at(b_y, b_x_1);
+		else
+			shared_b[fetch_idx.val].at(threadIdx.y, threadIdx.x*2+1) = 0;
+	}
+
+	fetch_idx.val++;
+
+	__syncthreads();
+
+
+	FloatT acc_0 = 0;
+	FloatT acc_1 = 0;
+	for (int block_num = 0, blocks_to_process = std::ceil(static_cast<double>(a.columns) / block_size); block_num < blocks_to_process; block_num++) {
+		//Fetch next block																																			 
+		if (block_num + 1 != blocks_to_process) {
+			int next_block_num = block_num + 1;
+			int a_x = next_block_num * block_size + threadIdx.x;
+			int a_y = blockIdx.y*block_size + threadIdx.y;
+			int b_x_0 = blockIdx.x*block_size * 2 + threadIdx.x * 2;
+			int b_x_1 = b_x_0 + 1;
+			int b_y = next_block_num * block_size + threadIdx.y;
+
+			//Copy element's value to shared memory or set it to 0 if it doens't exist
+			if (a_x < a.columns && a_y < a.rows)
+				shared_a[fetch_idx.val].at(threadIdx.y, threadIdx.x) = a.at(a_y, a_x);
+			else
+				shared_a[fetch_idx.val].at(threadIdx.y, threadIdx.x) = 0;
+
+			if (b_x_0 < b.columns && b_y < b.rows)
+				shared_b[fetch_idx.val].at(threadIdx.y, threadIdx.x * 2) = b.at(b_y, b_x_0);
+			else
+				shared_b[fetch_idx.val].at(threadIdx.y, threadIdx.x * 2) = 0;
+
+			if (b_x_1 < b.columns && b_y < b.rows)
+				shared_b[fetch_idx.val].at(threadIdx.y, threadIdx.x * 2 + 1) = b.at(b_y, b_x_1);
+			else
+				shared_b[fetch_idx.val].at(threadIdx.y, threadIdx.x * 2 + 1) = 0;
 		}
 
 		//Now we will make use of previously fetched block (and later fetch again to it's index)
 		fetch_idx.val++;
 
-		//To accumulate result
-		for (int i = 0; i < block_size; i++) {
-			acc += shared_a[fetch_idx.val].at(threadIdx.y, i)*shared_b[fetch_idx.val].at(i, threadIdx.x);
-		}
+		//Accumulate result
+		for (int i = 0; i < block_size; i++)
+			acc_0 += shared_a[fetch_idx.val].at(threadIdx.y, i)*shared_b[fetch_idx.val].at(i, threadIdx.x*2);
+
+		for (int i = 0; i < block_size; i++)
+			acc_1 += shared_a[fetch_idx.val].at(threadIdx.y, i)*shared_b[fetch_idx.val].at(i, threadIdx.x * 2+1);
 
 		__syncthreads();
 	}
 
-	out.at(blockIdx.y*block_size + threadIdx.y, blockIdx.x*block_size + threadIdx.x) = acc;
+	if (has_output_0)
+		out.at(out_y, out_x_0) = acc_0;
+	if (has_output_1)
+		out.at(out_y, out_x_1) = acc_1;
 }
 
-Matrix_t cuda_matmul(Matrix_t & h_a, Matrix_t & h_b) {
+Matrix_t cuda_matmul(Matrix_t & h_a, Matrix_t & h_b, bool use_mm2) {
 	if (h_a.columns != h_b.rows)
 		throw std::runtime_error("Sizes don't match");
 
@@ -57,7 +200,6 @@ Matrix_t cuda_matmul(Matrix_t & h_a, Matrix_t & h_b) {
 	FloatT * d_a_memory;
 	FloatT * d_b_memory;
 	FloatT * d_out_memory;
-
 	Matrix_t h_out(h_a.rows, h_b.columns);
 
 	try {
@@ -81,16 +223,26 @@ Matrix_t cuda_matmul(Matrix_t & h_a, Matrix_t & h_b) {
 		if (cudaStatus != cudaSuccess)
 			throw std::runtime_error("cudaMemcpy A failed");
 
-		cudaStatus = cudaMemcpy(d_b_memory, h_b.begin(), h_a.num_elems() * sizeof(FloatT), cudaMemcpyHostToDevice);
+		cudaStatus = cudaMemcpy(d_b_memory, h_b.begin(), h_b.num_elems() * sizeof(FloatT), cudaMemcpyHostToDevice);
 		if (cudaStatus != cudaSuccess)
 			throw std::runtime_error("cudaMemcpy B failed");
 
 		Matrix_t d_a(d_a_memory, h_a.rows, h_a.columns);
 		Matrix_t d_b(d_b_memory, h_b.rows, h_b.columns);
 		Matrix_t d_out(d_out_memory, h_out.rows, h_out.columns);
+		dim3 block(block_size, block_size);
+		
+		if (!use_mm2) {
+			dim3 grid(std::ceil(static_cast<double>(d_out.columns) / block_size),
+					  std::ceil(static_cast<double>(d_out.rows) / block_size));
+			mm << <grid, block >> > (d_a.shallow_copy(), d_b.shallow_copy(), d_out.shallow_copy());
+		}
+		else {
+			dim3 grid(std::ceil(static_cast<double>(d_out.columns) / block_size / 2),
+					  std::ceil(static_cast<double>(d_out.rows) / block_size));
+			mm2 << <grid, block >> > (d_a.shallow_copy(), d_b.shallow_copy(), d_out.shallow_copy());
+		}
 
-		//TODO ceil
-		mm << <dim3(d_out.columns/block_size, d_out.rows/block_size), dim3(block_size, block_size) >> >(d_a.shallow_copy(), d_b.shallow_copy(), d_out.shallow_copy());
 
 		cudaStatus = cudaGetLastError();
 		if (cudaStatus != cudaSuccess)
@@ -104,6 +256,10 @@ Matrix_t cuda_matmul(Matrix_t & h_a, Matrix_t & h_b) {
 		if (cudaStatus != cudaSuccess)
 			throw std::runtime_error("cudaMemcpy to host failed");
 
+		cudaFree(d_a_memory);
+		cudaFree(d_b_memory);
+		cudaFree(d_out_memory);
+
 		return h_out;
 	}
 	catch (std::exception & e) {
@@ -114,6 +270,8 @@ Matrix_t cuda_matmul(Matrix_t & h_a, Matrix_t & h_b) {
 		cudaFree(d_out_memory);
 		throw std::runtime_error("Cuda mm failed");
 	}
+
+
 }
 
 

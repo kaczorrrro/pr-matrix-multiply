@@ -5,4 +5,4 @@ constexpr int block_size = 2;
 using FloatT = int;
 using Matrix_t = Matrix<FloatT>;
 
-Matrix_t cuda_matmul(Matrix_t & h_a, Matrix_t & h_b);
+Matrix_t cuda_matmul(Matrix_t & h_a, Matrix_t & h_b, bool use_mm2 = false);

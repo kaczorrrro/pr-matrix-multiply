@@ -2,6 +2,7 @@
 #include <iostream>
 #include <algorithm>
 #include "cuda_compat.h"
+#include <cassert>
 
 template <class type>
 class Matrix {
@@ -10,7 +11,8 @@ public:
 	const int rows, columns;
 
 	CUDA_CALLABLE_MEMBER Matrix(const int rows, const int columns) :rows(rows), columns(columns), shoudl_delete(true){
-		matrix = new type[rows*columns];
+		//Zero initialize
+		matrix = new type[rows*columns]();
 	}
 
 	CUDA_CALLABLE_MEMBER Matrix(type* data, const int rows, const int columns) :
@@ -95,6 +97,7 @@ private:
 	type * matrix;
 	const bool shoudl_delete;
 	CUDA_CALLABLE_MEMBER void rangeCheck(int row, int column) {
+		assert(row >= 0 && row < rows && column >= 0 && column < columns);
 		//if (row < 0 || row >= rows || column < 0 || column >= columns) {
 		//	//std::cout << "Row: " << row << ", col: " << column << " out of index" << std::endl;
 		//	//throw std::invalid_argument("Wrong index");
