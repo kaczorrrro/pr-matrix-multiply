@@ -1,6 +1,7 @@
 #include "cuda_runtime.h"
 #include "device_launch_parameters.h"
 #include "MM Params.h"
+#include <chrono>
 
 struct Int1_t
 {
@@ -192,7 +193,7 @@ __global__ void mm2(Matrix_t a, Matrix_t b, Matrix_t out)
 		out.at(out_y, out_x_1) = acc_1;
 }
 
-Matrix_t cuda_matmul(Matrix_t & h_a, Matrix_t & h_b, bool use_mm2) {
+Matrix_t cuda_matmul(Matrix_t & h_a, Matrix_t & h_b, double * time, bool use_mm2) {
 	if (h_a.columns != h_b.rows)
 		throw std::runtime_error("Sizes don't match");
 
@@ -232,6 +233,7 @@ Matrix_t cuda_matmul(Matrix_t & h_a, Matrix_t & h_b, bool use_mm2) {
 		Matrix_t d_out(d_out_memory, h_out.rows, h_out.columns);
 		dim3 block(block_size, block_size);
 		
+		auto start = std::chrono::high_resolution_clock::now();
 		if (!use_mm2) {
 			dim3 grid(std::ceil(static_cast<double>(d_out.columns) / block_size),
 					  std::ceil(static_cast<double>(d_out.rows) / block_size));
@@ -243,7 +245,6 @@ Matrix_t cuda_matmul(Matrix_t & h_a, Matrix_t & h_b, bool use_mm2) {
 			mm2 << <grid, block >> > (d_a.shallow_copy(), d_b.shallow_copy(), d_out.shallow_copy());
 		}
 
-
 		cudaStatus = cudaGetLastError();
 		if (cudaStatus != cudaSuccess)
 			throw std::runtime_error("MM kernel launch failed");
@@ -251,6 +252,98 @@ Matrix_t cuda_matmul(Matrix_t & h_a, Matrix_t & h_b, bool use_mm2) {
 		cudaStatus = cudaDeviceSynchronize();
 		if (cudaStatus != cudaSuccess)
 			throw std::runtime_error("cudaDeviceSynchronize returned error code %d after launching addKernel!\n");
+		auto end = std::chrono::high_resolution_clock::now();
+		if (time)
+			*time = std::chrono::duration<double>(end - start).count();
+
+		cudaStatus = cudaMemcpy(h_out.begin(), d_out.begin(), d_out.num_elems() * sizeof(FloatT), cudaMemcpyDeviceToHost);
+		if (cudaStatus != cudaSuccess)
+			throw std::runtime_error("cudaMemcpy to host failed");
+
+		cudaFree(d_a_memory);
+		cudaFree(d_b_memory);
+		cudaFree(d_out_memory);
+
+		return h_out;
+	}
+	catch (std::exception & e) {
+		std::cerr << e.what() << std::endl;
+		std::cerr << "Cuda status: " << cudaStatus << std::endl;
+		cudaFree(d_a_memory);
+		cudaFree(d_b_memory);
+		cudaFree(d_out_memory);
+		throw std::runtime_error("Cuda mm failed");
+	}
+
+
+}
+
+
+
+Matrix_t cuda_matmul_with_benchmark(Matrix_t & h_a, Matrix_t & h_b, int iters, double * time, bool use_mm2) {
+	if (h_a.columns != h_b.rows)
+		throw std::runtime_error("Sizes don't match");
+
+	cudaError_t cudaStatus;
+	FloatT * d_a_memory;
+	FloatT * d_b_memory;
+	FloatT * d_out_memory;
+	Matrix_t h_out(h_a.rows, h_b.columns);
+
+	try {
+		cudaStatus = cudaSetDevice(0);
+		if (cudaStatus != cudaSuccess)
+			throw std::runtime_error("cudaSetDevice failed!Do you have a CUDA - capable GPU installed ? ");
+
+		cudaStatus = cudaMalloc((void**)&d_a_memory, h_a.num_elems() * sizeof(FloatT));
+		if (cudaStatus != cudaSuccess)
+			throw std::runtime_error("cudaMalloc A failed");
+
+		cudaStatus = cudaMalloc((void**)&d_b_memory, h_b.num_elems() * sizeof(FloatT));
+		if (cudaStatus != cudaSuccess)
+			throw std::runtime_error("cudaMalloc B failed");
+
+		cudaStatus = cudaMalloc((void**)&d_out_memory, h_out.num_elems() * sizeof(FloatT));
+		if (cudaStatus != cudaSuccess)
+			throw std::runtime_error("cudaMalloc Out failed");
+
+		cudaStatus = cudaMemcpy(d_a_memory, h_a.begin(), h_a.num_elems() * sizeof(FloatT), cudaMemcpyHostToDevice);
+		if (cudaStatus != cudaSuccess)
+			throw std::runtime_error("cudaMemcpy A failed");
+
+		cudaStatus = cudaMemcpy(d_b_memory, h_b.begin(), h_b.num_elems() * sizeof(FloatT), cudaMemcpyHostToDevice);
+		if (cudaStatus != cudaSuccess)
+			throw std::runtime_error("cudaMemcpy B failed");
+
+		Matrix_t d_a(d_a_memory, h_a.rows, h_a.columns);
+		Matrix_t d_b(d_b_memory, h_b.rows, h_b.columns);
+		Matrix_t d_out(d_out_memory, h_out.rows, h_out.columns);
+		dim3 block(block_size, block_size);
+
+		auto start = std::chrono::high_resolution_clock::now();
+		for (int i=0;i<iters;i++) {
+			if (!use_mm2) {
+				dim3 grid(std::ceil(static_cast<double>(d_out.columns) / block_size),
+					std::ceil(static_cast<double>(d_out.rows) / block_size));
+				mm << <grid, block >> > (d_a.shallow_copy(), d_b.shallow_copy(), d_out.shallow_copy());
+			}
+			else {
+				dim3 grid(std::ceil(static_cast<double>(d_out.columns) / block_size / 2),
+					std::ceil(static_cast<double>(d_out.rows) / block_size));
+				mm2 << <grid, block >> > (d_a.shallow_copy(), d_b.shallow_copy(), d_out.shallow_copy());
+			}
+
+			cudaStatus = cudaGetLastError();
+			if (cudaStatus != cudaSuccess)
+				throw std::runtime_error("MM kernel launch failed");
+
+			cudaStatus = cudaDeviceSynchronize();
+			if (cudaStatus != cudaSuccess)
+				throw std::runtime_error("cudaDeviceSynchronize returned error code %d after launching addKernel!\n");
+		}
+		auto end = std::chrono::high_resolution_clock::now();
+		if (time)
+			*time = std::chrono::duration<double>(end - start).count();
 
 		cudaStatus = cudaMemcpy(h_out.begin(), d_out.begin(), d_out.num_elems() * sizeof(FloatT), cudaMemcpyDeviceToHost);
 		if (cudaStatus != cudaSuccess)

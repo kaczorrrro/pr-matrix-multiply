@@ -6,8 +6,22 @@
 #include <stdio.h>
 #include <stdexcept>
 #include <string>
+#include <chrono>
 #include "MM Params.h"
+#include "Windows.h"
 
+
+//Baseline
+void multiply_matrices_IJK(Matrix_t & a, Matrix_t & b, Matrix_t & out)
+{
+	for (int i = 0; i < out.rows; i++) {
+		for (int j = 0; j < out.columns; j++) {
+			for (int k = 0; k < a.columns; k++) {			
+				out.at(i, j) += a.at(i, k) * b.at(k, j);
+			}
+		}
+	}
+}
 
 void multiply_matrices_IKJ(Matrix_t & a, Matrix_t & b, Matrix_t & out)
 {
@@ -43,9 +57,116 @@ struct Int1_t
 };
 
 
+void cpu_test() {
+	using namespace std::chrono;
+
+	int min_size = 1;
+	int max_size = 2048;
+	long long iters_start = pow(max_size / min_size, 2.0) * 4;
+
+	std::cout << "Algorithm,Size,Total bytes,Total time[us],Tests,Time per test,Time per elem" << std::endl;
+	for(double size_double=min_size, iters_double = iters_start; size_double <=max_size; size_double *=sqrt(sqrt(2)), iters_double /=sqrt(2)) {
+		int size = static_cast<int>(round(size_double));
+		long long iters = static_cast<long long>(iters_double);
+		auto start = high_resolution_clock::now();
+		auto end = high_resolution_clock::now();
+
+		Matrix_t h_a(size, size); for (FloatT & e : h_a) e = rand();
+		Matrix_t h_b(size, size); for (FloatT & e : h_b) e = rand();
+		Matrix_t h_out(size, size);
+
+		start = high_resolution_clock::now();
+		for (long long i = 0; i < iters; i++)
+			multiply_matrices_JKI(h_a, h_b, h_out);
+		end = high_resolution_clock::now();
+		std::cout
+			<< "JKI,"
+			<< size << ","
+			<< size * size * 3 * sizeof(FloatT) << ","
+			<< duration<double>(end - start).count() << ","
+			<< iters << ","
+			<< duration<double>(end - start).count() / iters << ","
+			<< duration<double>(end - start).count() / iters / (size*size) << ","
+			<< std::endl;
+
+		start = high_resolution_clock::now();
+		for (long long i = 0; i < iters; i++)
+			multiply_matrices_IKJ(h_a, h_b, h_out);
+		end = high_resolution_clock::now();
+		std::cout
+			<< "IKJ,"
+			<< size << ","
+			<< size * size * 3 * sizeof(FloatT) << ","
+			<< duration<double>(end - start).count() << ","
+			<< iters << ","
+			<< duration<double>(end - start).count() / iters << ","
+			<< duration<double>(end - start).count() / iters / (size*size) << ","
+			<< std::endl;
+
+		start = high_resolution_clock::now();
+		for (long long i = 0; i < iters; i++)
+			multiply_matrices_IJK(h_a, h_b, h_out);
+		end = high_resolution_clock::now();
+		std::cout
+			<< "IJK,"
+			<< size << ","
+			<< size * size * 3 * sizeof(FloatT) << ","
+			<< duration<double>(end - start).count() << ","
+			<< iters << ","
+			<< duration<double>(end - start).count()/iters << ","
+			<< duration<double>(end - start).count()/iters/(size*size) << ","
+			<< std::endl;
+	}
+}
+
+
+void cpu_num_cores() {
+	using namespace std::chrono;
+
+	while(true){
+		int size = 128;
+		long long iters = 1 << 8;
+
+		Matrix_t h_a(size, size); for (FloatT & e : h_a) e = rand();
+		Matrix_t h_b(size, size); for (FloatT & e : h_b) e = rand();
+		Matrix_t h_out(size, size);
+
+		auto start = high_resolution_clock::now();
+		for (long long i = 0; i < iters; i++)
+			multiply_matrices_JKI(h_a, h_b, h_out);
+		auto end = high_resolution_clock::now();
+		std::cout
+			<< "JKI,"
+			<< size << ","
+			<< size * size * 3 * sizeof(FloatT) << ","
+			<< duration_cast<microseconds>(end - start).count() << ","
+			<< iters << std::endl;
+
+		//auto start = high_resolution_clock::now();
+		//for (long long i = 0; i < iters; i++)
+		//	multiply_matrices_IKJ(h_a, h_b, h_out);
+		//auto end = high_resolution_clock::now();
+		//std::cout
+		//	<< "IKJ,"
+		//	<< size << ","
+		//	<< size * size * 3 * sizeof(FloatT) << ","
+		//	<< duration_cast<microseconds>(end - start).count() << ","
+		//	<< iters << std::endl;
+	}
+}
+
+
+void page_size() {
+	SYSTEM_INFO systemInfo;
+	GetSystemInfo(&systemInfo);
+	std::cout << systemInfo.dwPageSize;
+}
+
 int main()
 {
-	int matrix_size = 5;
+	//cpu_test();
+	//return 0;
+	int matrix_size = 4096;
 	//for (int i=8; i<1000;i++) {
 	//	Matrix_t h_a(i, i); for (FloatT & e : h_a) e = rand();
 	//	Matrix_t h_b(i, i); for (FloatT & e : h_b) e = rand();
@@ -62,23 +183,26 @@ int main()
 	//}
 
 
-	Matrix_t h_a(matrix_size, matrix_size); for (FloatT & e : h_a) e = rand() % 5;
-	Matrix_t h_b(matrix_size, matrix_size*2); for (FloatT & e : h_b) e = rand() % 4;
-	h_a.print();
-	std::cout << std::endl;
-	h_b.print();
-	std::cout << std::endl;
-	Matrix_t h_out_gpu = cuda_matmul(h_a, h_b, true);
-	Matrix_t h_out_cpu(h_out_gpu.rows, h_out_gpu.columns);
-	h_out_cpu.setAllTo(0);
-	multiply_matrices_IKJ(h_a, h_b, h_out_cpu);
+	Matrix_t h_a(matrix_size, matrix_size); for (FloatT & e : h_a) e = rand();
+	Matrix_t h_b(matrix_size, matrix_size); for (FloatT & e : h_b) e = rand();
+	//h_a.print();
+	//std::cout << std::endl;
+	//h_b.print();
+	//std::cout << std::endl;
+	double time;
+	Matrix_t h_out_gpu = cuda_matmul_with_benchmark(h_a, h_b, 20, &time, false);
+	std::cout << "end" << std::endl;
+	std::cout << "Took " << time << std::endl;
+	//Matrix_t h_out_cpu(h_out_gpu.rows, h_out_gpu.columns);
+	//h_out_cpu.setAllTo(0);
+	//multiply_matrices_IKJ(h_a, h_b, h_out_cpu);
 
-	std::cout << "\nGPU:" << std::endl;
-	h_out_gpu.print();
-	std::cout << "\nCPU: " << std::endl;
-	h_out_cpu.print();
+	//std::cout << "\nGPU:" << std::endl;
+	//h_out_gpu.print();
+	//std::cout << "\nCPU: " << std::endl;
+	//h_out_cpu.print();
 
-	std::cout << "CPU == GPU: " << (h_out_cpu == h_out_gpu) << std::endl;
+	//std::cout << "CPU == GPU: " << (h_out_cpu == h_out_gpu) << std::endl;
 
 	// cudaDeviceReset must be called before exiting in order for profiling and
 	// tracing tools such as Nsight and Visual Profiler to show complete traces.
