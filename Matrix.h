@@ -43,7 +43,7 @@ public:
 		return matrix + columns*rows;
 	}
 
-	CUDA_CALLABLE_MEMBER type & at(const int & row, const int & column) {
+	CUDA_CALLABLE_MEMBER type & at(int row, int column) const{
 #ifndef NDEBUG
 		rangeCheck(row, column);
 #endif

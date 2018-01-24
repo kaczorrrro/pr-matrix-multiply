@@ -9,6 +9,7 @@
 #include <chrono>
 #include "MM Params.h"
 #include "Windows.h"
+#include <cmath>
 
 
 //Baseline
@@ -23,34 +24,63 @@ void multiply_matrices_IJK(Matrix_t & a, Matrix_t & b, Matrix_t & out)
 	}
 }
 
-void multiply_matrices_IKJ(Matrix_t & a, Matrix_t & b, Matrix_t & out)
+void multiply_matrices_IKJ(Matrix_t & A, Matrix_t & B, Matrix_t & C)
 {
-#pragma omp parallel for 
-	for (int i = 0; i < out.rows; i++) {
-		for (int k = 0; k < a.columns; k++) {
-			for (int j = 0; j < out.columns; j++) {
-				out.at(i, j) += a.at(i, k) * b.at(k, j);
-				//No race, since each thread writes to different element
-				//mostly no cache invalidation since these elems are far away
+#pragma omp parallel
+	{
+		auto a = A.shallow_copy();
+		auto b = B.shallow_copy();
+		auto out = C.shallow_copy();
+#pragma omp for 
+		for (int i = 0; i < out.rows; i++) {
+			for (int k = 0; k < a.columns; k++) {
+				for (int j = 0; j < out.columns; j++) {
+					out.at(i, j) += a.at(i, k) * b.at(k, j);
+					//No race, since each thread writes to different element
+					//mostly no cache invalidation since these elems are far away
+				}
+			}
+		}
+	}
+
+}
+
+
+void multiply_matrices_JKI(Matrix_t & A, Matrix_t & B, Matrix_t & C)
+{
+#pragma omp parallel
+	{
+		auto a = A.shallow_copy();
+		auto b = B.shallow_copy();
+		auto out = C.shallow_copy();
+#pragma omp for 
+		for (int j = 0; j < out.columns; j++) {
+			for (int k = 0; k < a.columns; k++) {
+				for (int i = 0; i < out.rows; i++) {
+					out.at(i, j) += a.at(i, k) * b.at(k, j);
+					//No race, since each thread writes to different element
+					//Cache invalidation will happen, sice these elems are almost next to each other
+
+				}
 			}
 		}
 	}
 }
 
-void multiply_matrices_JKI(Matrix_t & a, Matrix_t & b, Matrix_t & out)
-{
-#pragma omp parallel for 
-	for (int j = 0; j < out.columns; j++) {
-		for (int k = 0; k < a.columns; k++) {
-			for (int i = 0; i < out.rows; i++) {
-				out.at(i, j) += a.at(i, k) * b.at(k, j);
-				//No race, since each thread writes to different element
-				//Cache invalidation will happen, sice these elems are almost next to each other
+//void multiply_matrices_IKJ(float* a, float* b, float * out, int n)
+//{
+//	//#pragma omp parallel for
+//	for (int i = 0; i < n; i++) {
+//		for (int k = 0; k < n; k++) {
+//			for (int j = 0; j < n; j++) {
+//				out[i*n + j] += a[i*n + k] * b[k*n + j];
+//				//No race, since each thread writes to different element
+//				//mostly no cache invalidation since these elems are far away
+//			}
+//		}
+//	}
+//}
 
-			}
-		}
-	}
-}
 struct Int1_t
 {
 	unsigned int a : 1;
@@ -103,56 +133,62 @@ void cpu_test() {
 			<< duration<double>(end - start).count() / iters / (size*size) << ","
 			<< std::endl;
 
-		start = high_resolution_clock::now();
-		for (long long i = 0; i < iters; i++)
-			multiply_matrices_IJK(h_a, h_b, h_out);
-		end = high_resolution_clock::now();
-		std::cout
-			<< "IJK,"
-			<< size << ","
-			<< size * size * 3 * sizeof(FloatT) << ","
-			<< duration<double>(end - start).count() << ","
-			<< iters << ","
-			<< duration<double>(end - start).count()/iters << ","
-			<< duration<double>(end - start).count()/iters/(size*size) << ","
-			<< std::endl;
+		//start = high_resolution_clock::now();
+		//for (long long i = 0; i < iters; i++)
+		//	multiply_matrices_IJK(h_a, h_b, h_out);
+		//end = high_resolution_clock::now();
+		//std::cout
+		//	<< "IJK,"
+		//	<< size << ","
+		//	<< size * size * 3 * sizeof(FloatT) << ","
+		//	<< duration<double>(end - start).count() << ","
+		//	<< iters << ","
+		//	<< duration<double>(end - start).count()/iters << ","
+		//	<< duration<double>(end - start).count()/iters/(size*size) << ","
+		//	<< std::endl;
 	}
 }
 
 
 void cpu_num_cores() {
 	using namespace std::chrono;
-
-	while(true){
-		int size = 128;
-		long long iters = 1 << 8;
+	float useless = 0;
+	for (int i = 0; i < 100;i++) {
+		int size = 1024;
+		long long iters = 1 << 0;
 
 		Matrix_t h_a(size, size); for (FloatT & e : h_a) e = rand();
 		Matrix_t h_b(size, size); for (FloatT & e : h_b) e = rand();
 		Matrix_t h_out(size, size);
 
-		auto start = high_resolution_clock::now();
-		for (long long i = 0; i < iters; i++)
-			multiply_matrices_JKI(h_a, h_b, h_out);
-		auto end = high_resolution_clock::now();
-		std::cout
-			<< "JKI,"
-			<< size << ","
-			<< size * size * 3 * sizeof(FloatT) << ","
-			<< duration_cast<microseconds>(end - start).count() << ","
-			<< iters << std::endl;
-
 		//auto start = high_resolution_clock::now();
 		//for (long long i = 0; i < iters; i++)
-		//	multiply_matrices_IKJ(h_a, h_b, h_out);
+		//	multiply_matrices_JKI(h_a, h_b, h_out);
 		//auto end = high_resolution_clock::now();
 		//std::cout
-		//	<< "IKJ,"
+		//	<< "JKI,"
 		//	<< size << ","
 		//	<< size * size * 3 * sizeof(FloatT) << ","
 		//	<< duration_cast<microseconds>(end - start).count() << ","
 		//	<< iters << std::endl;
+
+		auto start = high_resolution_clock::now();
+		for (long long i = 0; i < iters; i++) {
+			//multiply_matrices_IKJ(h_a.begin(), h_b.begin(), h_out.begin(), size);
+			multiply_matrices_IKJ(h_a, h_b, h_out);
+		}
+
+		auto end = high_resolution_clock::now();
+		std::cout
+			<< "IKJ,"
+			<< size << ","
+			<< size * size * 3 * sizeof(FloatT) << ","
+			<< duration_cast<microseconds>(end - start).count() << ","
+			<< iters << std::endl;
+		for (FloatT & e : h_out) 
+			useless += e;
 	}
+	std::cout << useless << std::endl;
 }
 
 
@@ -164,8 +200,9 @@ void page_size() {
 
 int main()
 {
-	//cpu_test();
-	//return 0;
+	cpu_test();
+	//cpu_num_cores();
+	return 0;
 	int matrix_size = 4096;
 	//for (int i=8; i<1000;i++) {
 	//	Matrix_t h_a(i, i); for (FloatT & e : h_a) e = rand();
